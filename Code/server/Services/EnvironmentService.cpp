@@ -9,13 +9,19 @@
 #include <Messages/ServerTimeSettings.h>
 #include <Messages/ActivateRequest.h>
 #include <Messages/NotifyActivate.h>
+#include <Messages/LockChangeRequest.h>
+#include <Messages/NotifyLockChange.h>
+#include <Messages/AssignObjectRequest.h>
+#include <Messages/AssignObjectResponse.h>
 #include <Components.h>
 
 EnvironmentService::EnvironmentService(World &aWorld, entt::dispatcher &aDispatcher) : m_world(aWorld)
 {
     m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&EnvironmentService::OnUpdate>(this);
     m_joinConnection = aDispatcher.sink<PlayerJoinEvent>().connect<&EnvironmentService::OnPlayerJoin>(this);
+    m_assignObjectConnection = aDispatcher.sink<PacketEvent<AssignObjectRequest>>().connect<&EnvironmentService::OnAssignObjectRequest>(this);
     m_activateConnection = aDispatcher.sink<PacketEvent<ActivateRequest>>().connect<&EnvironmentService::OnActivate>(this);
+    m_lockChangeConnection = aDispatcher.sink<PacketEvent<LockChangeRequest>>().connect<&EnvironmentService::OnLockChange>(this);
 }
 
 void EnvironmentService::OnPlayerJoin(const PlayerJoinEvent& acEvent) const noexcept
@@ -26,6 +32,37 @@ void EnvironmentService::OnPlayerJoin(const PlayerJoinEvent& acEvent) const noex
 
     const auto &playerComponent = m_world.get<PlayerComponent>(acEvent.Entity);
     GameServer::Get()->Send(playerComponent.ConnectionId, timeMsg);
+}
+
+void EnvironmentService::OnAssignObjectRequest(const PacketEvent<AssignObjectRequest>& acMessage) noexcept
+{
+    auto message = acMessage.Packet;
+    auto view = m_world.view<FormIdComponent>();
+    auto id = message.Id;
+
+    const auto itor = std::find_if(std::begin(view), std::end(view), [view, id](auto entity) {
+        const auto& formIdComponent = view.get<FormIdComponent>(entity);
+        return formIdComponent.Id == id;
+    });
+
+    if (itor != std::end(view))
+    {
+        auto& formIdComponent = view.get<FormIdComponent>(*itor);
+
+        AssignObjectResponse response;
+        response.Id = formIdComponent.Id;
+
+        auto& lockComponent = m_world.get<LockComponent>(*itor);
+        response.CurrentLockData = lockComponent.CurrentLockData;
+
+        GameServer::Get()->Send(acMessage.ConnectionId, response);
+        return;
+    }
+
+    const auto cEntity = m_world.create();
+    m_world.emplace<FormIdComponent>(cEntity, message.Id);
+    m_world.emplace<CellIdComponent>(cEntity, message.CellId);
+    m_world.emplace<LockComponent>(cEntity, message.CurrentLockdata);
 }
 
 void EnvironmentService::OnActivate(const PacketEvent<ActivateRequest>& acMessage) const noexcept
@@ -43,6 +80,41 @@ void EnvironmentService::OnActivate(const PacketEvent<ActivateRequest>& acMessag
         if (player.ConnectionId != acMessage.ConnectionId && cell.Cell == acMessage.Packet.CellId)
         {
             GameServer::Get()->Send(player.ConnectionId, notifyActivate);
+        }
+    }
+}
+
+void EnvironmentService::OnLockChange(const PacketEvent<LockChangeRequest>& acMessage) const noexcept
+{
+    NotifyLockChange notifyLockChange;
+    notifyLockChange.Id = acMessage.Packet.Id;
+    notifyLockChange.IsLocked = acMessage.Packet.IsLocked;
+    notifyLockChange.LockLevel = acMessage.Packet.LockLevel;
+
+    auto objectView = m_world.view<FormIdComponent, LockComponent>();
+
+    GameId id = acMessage.Packet.Id;
+    const auto itor = std::find_if(std::begin(objectView), std::end(objectView), [objectView, id](auto entity) {
+        const auto& formIdComponent = objectView.get<FormIdComponent>(entity);
+        return formIdComponent.Id == id;
+    });
+
+    if (itor != std::end(objectView))
+    {
+        auto& lockComponent = objectView.get<LockComponent>(*itor);
+        lockComponent.CurrentLockData.IsLocked = acMessage.Packet.IsLocked;
+        lockComponent.CurrentLockData.LockLevel = acMessage.Packet.LockLevel;
+    }
+
+    auto view = m_world.view<PlayerComponent, CellIdComponent>();
+    for (auto entity : view)
+    {
+        auto& player = view.get<PlayerComponent>(entity);
+        auto& cell = view.get<CellIdComponent>(entity);
+
+        if (player.ConnectionId != acMessage.ConnectionId && cell.Cell == acMessage.Packet.CellId)
+        {
+            GameServer::Get()->Send(player.ConnectionId, notifyLockChange);
         }
     }
 }
