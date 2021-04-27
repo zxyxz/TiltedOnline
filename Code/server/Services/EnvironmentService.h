@@ -2,13 +2,14 @@
 
 #include <Events/PacketEvent.h>
 #include <Structs/TimeModel.h>
+#include <Structs/GameId.h>
 
 struct World;
 struct UpdateEvent;
 struct PlayerJoinEvent;
 struct ActivateRequest;
 struct LockChangeRequest;
-struct AssignObjectRequest;
+struct AssignObjectsRequest;
 
 class EnvironmentService
 {
@@ -35,12 +36,13 @@ public:
 private:
     void OnUpdate(const UpdateEvent &) noexcept; 
     void OnPlayerJoin(const PlayerJoinEvent&) const noexcept;
-    void OnAssignObjectRequest(const PacketEvent<AssignObjectRequest>&) noexcept;
+    void OnAssignObjectsRequest(const PacketEvent<AssignObjectsRequest>&) noexcept;
     void OnActivate(const PacketEvent<ActivateRequest>&) const noexcept;
     void OnLockChange(const PacketEvent<LockChangeRequest>&) const noexcept;
 
     TimeModel m_timeModel;
     uint64_t m_lastTick = 0;
+    Map<GameId, entt::entity> m_objectsWithLocks;
 
     entt::scoped_connection m_updateConnection;
     entt::scoped_connection m_joinConnection;
